@@ -37,7 +37,7 @@ async function testTranscribe() {
 // ------------------
 async function testLabel() {
     const res = await axios.post(`${BASE_URL}/label`, {
-        prompt: "Objects: pills, bottle. User said: these are my pills. Label:"
+        prompt: "Generate a suitable label for the following object:these are my pills"
     });
 
     console.log("Label:", res.data);
