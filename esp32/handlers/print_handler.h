@@ -3,7 +3,6 @@
 #include <Arduino.h>
 #include "../components/solenoids.h"
 #include "../components/braille.h"
-#include "../components/vibration.h"
 
 namespace PrintHandler {
   inline void init() {
@@ -11,21 +10,20 @@ namespace PrintHandler {
   }
 
   inline void printChar(const String& pattern) {
-    String first = pattern.substring(0, 3);
-    String second = pattern.substring(3, 6);
-
-    Solenoids::firePattern(first);
-    delay(250);
-    Solenoids::firePattern(second);
-    delay(400);
+    // For each '1' in the pattern, fire the solenoid three times
+    for (int i = 0; i < pattern.length(); i++) {
+      if (pattern[i] == '1') {
+        Solenoids::fireThreeTimes();
+        delay(500);  // Delay between dots
+      }
+    }
   }
 
   inline void printText(const String& text) {
-    Vibration::notifyPrintStart();
     for (int i = 0; i < text.length(); i++) {
       String pattern = Braille::mapCharToPattern(tolower(text[i]));
       printChar(pattern);
+      delay(1000);  // Delay between characters
     }
-    Vibration::notifyPrintEnd();
   }
 }

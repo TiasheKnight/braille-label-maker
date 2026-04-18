@@ -8,15 +8,11 @@ namespace FeedHandler {
     RollerMotor::init();
   }
 
-  inline void advanceLabel(uint32_t durationMs = 800) {
-    RollerMotor::feedForward(220);
-    delay(durationMs);
-    RollerMotor::stop();
+  inline void advanceLabel(int steps = 100) {
+    RollerMotor::feedForward(steps);
   }
 
-  inline void retractLabel(uint32_t durationMs = 500) {
-    RollerMotor::feedReverse(220);
-    delay(durationMs);
-    RollerMotor::stop();
+  inline void retractLabel(int steps = 100) {
+    RollerMotor::feedReverse(steps);
   }
 }
