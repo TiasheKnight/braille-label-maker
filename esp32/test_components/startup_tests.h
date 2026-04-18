@@ -1,88 +1,47 @@
 #pragma once
 
 #include <Arduino.h>
-#include "../components/wifi_manager.h"
 #include "../components/solenoids.h"
 #include "../components/roller_motor.h"
-#include "../components/vibration.h"
-#include "../components/audio.h"
-#include "../components/camera_module.h"
-#include "../components/power.h"
+#include "../components/servo.h"
+#include "../handlers/servo_handler.h"
 
 namespace StartupTests {
-  inline bool testWiFi() {
-    Serial.print("[TEST] WiFi... ");
-    if (!WifiManager::connected()) {
-      Serial.println("FAIL (not connected)");
-      return false;
-    }
-    Serial.println("OK");
-    return true;
-  }
-
-  inline bool testSolenoids() {
-    Serial.print("[TEST] Solenoids... ");
+  inline bool testSolenoid() {
+    Serial.print("[TEST] Solenoid (3 pulses)... ");
     Solenoids::init();
-    Solenoids::pulse(0, 40);
-    Solenoids::pulse(1, 40);
-    Solenoids::pulse(2, 40);
+    Solenoids::stampThreeTimes(100, 180);
     Serial.println("OK");
     return true;
   }
 
-  inline bool testRollerMotor() {
-    Serial.print("[TEST] Roller motor... ");
+  inline bool testFeedMotors() {
+    Serial.print("[TEST] Feed motors forward/reverse... ");
     RollerMotor::init();
-    RollerMotor::feedForward(100);
-    delay(100);
+    RollerMotor::feedForward(128);
+    delay(120);
+    RollerMotor::feedReverse(128);
     RollerMotor::stop();
     Serial.println("OK");
     return true;
   }
 
-  inline bool testVibration() {
-    Serial.print("[TEST] Vibration... ");
-    Vibration::init();
-    Vibration::pulse(40);
+  inline bool testServoTemplates() {
+    Serial.print("[TEST] Servo template 7 positions... ");
+    ServoHandler::init();
+    ServoSelector::sweepAllPositions(220);
+    ServoHandler::home();
     Serial.println("OK");
     return true;
   }
 
-  inline bool testAudio() {
-    Serial.print("[TEST] Audio... ");
-    Audio::init();
-    Serial.println("OK (placeholder)");
-    return true;
-  }
-
-  inline bool testCamera() {
-    Serial.print("[TEST] Camera... ");
-    CameraModule::init();
-    CameraModule::captureFrame();
-    Serial.println("OK (placeholder)");
-    return true;
-  }
-
-  inline bool testPower() {
-    Serial.print("[TEST] Power... ");
-    Power::init();
-    float voltage = Power::readBatteryVoltage();
-    Serial.print(voltage, 2);
-    Serial.println(" V");
-    return true;
-  }
-
   inline void runAll() {
-    Serial.println("Starting component startup tests...");
+    Serial.println("Starting stripped-down startup tests...");
     bool result = true;
 
-    result &= testWiFi();
-    result &= testSolenoids();
-    result &= testRollerMotor();
-    result &= testVibration();
-    result &= testAudio();
-    result &= testCamera();
-    result &= testPower();
+    result &= testFeedMotors();
+    result &= testServoTemplates();
+    result &= testSolenoid();
 
     if (result) {
       Serial.println("[TEST] ALL COMPONENTS OK");
