@@ -203,6 +203,13 @@ def print_label():
     return jsonify({"encoded": encoded, "braille": braille, "braille_dots": braille_dots})
 
 # -------------------------
+# PING ROUTE
+# -------------------------
+@app.route("/ping", methods=["GET"])
+def ping():
+    return jsonify({"status": "ok"})
+
+# -------------------------
 # CONFIRM ROUTE
 # -------------------------
 @app.route("/confirm", methods=["POST"])

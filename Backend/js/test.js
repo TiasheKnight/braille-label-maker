@@ -5,6 +5,14 @@ const FormData = require("form-data");
 const BASE_URL = "http://165.245.138.5:5000";
 
 // ------------------
+// TEST CONNECTION
+// ------------------
+async function testPing() {
+    const res = await axios.get(`${BASE_URL}/ping`);
+    console.log("Connection:", res.data);
+}
+
+// ------------------
 // TEST IMAGE PIPELINE
 // ------------------
 async function testImagePipeline() {
@@ -60,6 +68,7 @@ async function testPrint() {
 // Run tests
 (async () => {
     try {
+        await testPing();
         await testImagePipeline();
         await testAudioPipeline();
         await testConfirm();
