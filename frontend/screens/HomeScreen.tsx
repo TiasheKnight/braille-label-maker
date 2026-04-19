@@ -1,4 +1,4 @@
-import React, { useRef, useState, useCallback, useEffect } from 'react';
+import React, { useRef, useState, useCallback, useEffect, useMemo } from 'react';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import {
   View,
@@ -11,6 +11,7 @@ import {
   StatusBar,
   ActivityIndicator,
   Alert,
+  PanResponder,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -19,7 +20,7 @@ import { Audio } from 'expo-av';
 import * as Speech from 'expo-speech';
 import { Ionicons } from '@expo/vector-icons';
 import { RootStackParamList } from '../App';
-import { sendVoiceRecording, sendConfirmation, AIResponse } from '../utils/api';
+import { sendVoiceRecording, sendImage, sendPrint, PipelineResponse } from '../utils/api';
 import { addHistoryEntry } from '../utils/history';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -29,7 +30,6 @@ type AppState =
   | 'recording'
   | 'processing'
   | 'confirming'
-  | 'confirm_recording'
   | 'scanning'
   | 'done';
 
@@ -37,6 +37,7 @@ type Nav = NativeStackNavigationProp<RootStackParamList, 'Home'>;
 type HoldMode = 'voice' | 'scan';
 
 const HOLD_DELAY_MS = 1000;
+const CONFIRM_SWIPE_THRESHOLD = 72;
 const ResolvedCameraView: any = (CameraView as any)?.default ?? (CameraView as any);
 
 export default function HomeScreen() {
@@ -44,15 +45,27 @@ export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const scrollRef = useRef<ScrollView>(null);
   const recordingRef = useRef<Audio.Recording | null>(null);
+  const cameraRef = useRef<any>(null);
   const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const holdModeRef = useRef<HoldMode | null>(null);
   const isSwipingRef = useRef(false);
   const [activePage, setActivePage] = useState(0);
   const [appState, setAppState] = useState<AppState>('idle');
-  const [pendingResult, setPendingResult] = useState<AIResponse | null>(null);
+  const [pendingResult, setPendingResult] = useState<PipelineResponse | null>(null);
   const [statusLabel, setStatusLabel] = useState('');
   const [permission, requestPermission] = useCameraPermissions();
   const [showCamera, setShowCamera] = useState(false);
+
+  const pendingResultRef = useRef<PipelineResponse | null>(null);
+  const activePageRef = useRef(0);
+  const confirmHandledRef = useRef(false);
+
+  useEffect(() => {
+    pendingResultRef.current = pendingResult;
+  }, [pendingResult]);
+  useEffect(() => {
+    activePageRef.current = activePage;
+  }, [activePage]);
 
   const ensureAudioPermission = async () => {
     const { status } = await Audio.requestPermissionsAsync();
@@ -84,6 +97,9 @@ export default function HomeScreen() {
     Speech.speak('Recording started. Release to finish and send.', { language: 'en' });
     setStatusLabel('Listening… release to send');
     setAppState('recording');
+
+    // Wait 5 seconds for speech to finish and phone to settle before recording
+    await new Promise(resolve => setTimeout(resolve, 5000));
 
     const recording = new Audio.Recording();
     await recording.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
@@ -161,15 +177,22 @@ export default function HomeScreen() {
       const result = await sendVoiceRecording(uri);
       setPendingResult(result);
 
-      setAppState('confirming');
-      setStatusLabel(`"${result.word}" — say Confirm to print`);
+      // Play the audio
+      const sound = new Audio.Sound();
+      await sound.loadAsync({ uri: `data:audio/mp3;base64,${result.audio}` });
+      await sound.playAsync();
 
-      Speech.speak(result.confirmationText || `${result.word}. Say confirm to print.`, {
-        language: 'en',
-        onDone: () => {
-          void startConfirmRecording(result);
-        },
-      });
+      if (result.label) {
+        setAppState('confirming');
+        setStatusLabel(`"${result.label}" — swipe left to print, right to cancel`);
+        setTimeout(() => {
+          Speech.speak('Swipe left to print. Swipe right to cancel.', { language: 'en' });
+        }, 3000);
+      } else {
+        setAppState('idle');
+        setStatusLabel('');
+        setPendingResult(null);
+      }
     } catch (err) {
       console.error(err);
       setAppState('idle');
@@ -183,7 +206,7 @@ export default function HomeScreen() {
     scheduleHoldStart('scan');
   }, [activePage, scheduleHoldStart]);
 
-  const handleScanPressOut = useCallback(() => {
+  const handleScanPressOut = useCallback(async () => {
     if (holdModeRef.current === 'scan' && holdTimerRef.current) {
       cancelPendingHold();
       setStatusLabel('');
@@ -195,54 +218,112 @@ export default function HomeScreen() {
 
     if (appState !== 'scanning') return;
 
-    setAppState('idle');
-    setStatusLabel('');
-    setShowCamera(false);
-    Alert.alert('Scan mode', 'Camera preview finished. Wire camera + /scan endpoint next.');
-  }, [appState, cancelPendingHold]);
+    try {
+      const photo = await cameraRef.current?.takePictureAsync();
+      if (!photo?.uri) throw new Error('No photo taken');
 
-  const startConfirmRecording = async (result: AIResponse) => {
-    const ok = await ensureAudioPermission();
-    if (!ok) return;
+      setAppState('processing');
+      setStatusLabel('Processing…');
 
-    setAppState('confirm_recording');
-    setStatusLabel('Say "Confirm" or "Cancel"');
+      const result = await sendImage(photo.uri);
+      setPendingResult(result);
 
-    const confirmRec = new Audio.Recording();
-    await confirmRec.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
-    await confirmRec.startAsync();
+      // Play the audio
+      const sound = new Audio.Sound();
+      await sound.loadAsync({ uri: `data:audio/mp3;base64,${result.audio}` });
+      await sound.playAsync();
 
-    setTimeout(async () => {
-      try {
-        await confirmRec.stopAndUnloadAsync();
-        const uri = confirmRec.getURI();
-        if (!uri) return;
-
-        const confirmation = await sendConfirmation(uri, result.word);
-        if (confirmation.confirmed) {
-          await addHistoryEntry({
-            word: result.word,
-            braille: result.braille,
-            brailleDots: result.brailleDots,
-            mode: 'voice',
-          });
-          Speech.speak(`${result.word} sent to printer.`, { language: 'en' });
-          setStatusLabel('Sent to printer ✓');
-        } else {
-          Speech.speak('Cancelled. Tap to try again.', { language: 'en' });
-          setStatusLabel('Cancelled');
-        }
-      } catch {
-        setStatusLabel('Error — tap to retry');
-      }
-
-      setTimeout(() => {
+      if (result.label) {
+        setAppState('confirming');
+        setStatusLabel(`"${result.label}" — swipe left to print, right to cancel`);
+        setTimeout(() => {
+          Speech.speak('Swipe left to print. Swipe right to cancel.', { language: 'en' });
+        }, 3000);
+      } else {
         setAppState('idle');
         setStatusLabel('');
         setPendingResult(null);
-      }, 2000);
-    }, 3000);
-  };
+        setShowCamera(false);
+      }
+    } catch (err) {
+      console.error(err);
+      setAppState('idle');
+      setStatusLabel('');
+      setShowCamera(false);
+      Speech.speak('Something went wrong. Hold to try again.', { language: 'en' });
+    }
+  }, [appState, cancelPendingHold]);
+
+  const resetAfterConfirm = useCallback(() => {
+    setTimeout(() => {
+      setAppState('idle');
+      setStatusLabel('');
+      setPendingResult(null);
+      setShowCamera(false);
+      confirmHandledRef.current = false;
+    }, 2000);
+  }, []);
+
+  const commitPrint = useCallback(async () => {
+    if (confirmHandledRef.current) return;
+    const result = pendingResultRef.current;
+    if (!result?.label) return;
+    confirmHandledRef.current = true;
+
+    const label = result.label;
+    const page = activePageRef.current;
+    const mode = page === 0 ? 'voice' : 'image';
+
+    setAppState('processing');
+    setStatusLabel('Printing…');
+    Speech.stop();
+
+    try {
+      const printResult = await sendPrint(label, mode);
+      await addHistoryEntry({
+        word: label,
+        braille: printResult.braille,
+        brailleDots: printResult.braille_dots,
+        mode: page === 0 ? 'voice' : 'image',
+      });
+      Speech.speak('Printed.', { language: 'en' });
+      setStatusLabel('Sent to printer ✓');
+    } catch {
+      Speech.speak('Print failed. Try again.', { language: 'en' });
+      setStatusLabel('Error — tap to retry');
+    }
+
+    resetAfterConfirm();
+  }, [resetAfterConfirm]);
+
+  const commitCancel = useCallback(() => {
+    if (confirmHandledRef.current) return;
+    confirmHandledRef.current = true;
+    Speech.stop();
+    Speech.speak('Cancelled.', { language: 'en' });
+    setStatusLabel('Cancelled');
+    resetAfterConfirm();
+  }, [resetAfterConfirm]);
+
+  const confirmPanResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: (_, gestureState) =>
+          Math.abs(gestureState.dx) > 10 || Math.abs(gestureState.dy) > 10,
+        onPanResponderRelease: (_, gestureState) => {
+          const { dx, dy } = gestureState;
+          if (Math.abs(dx) < CONFIRM_SWIPE_THRESHOLD) return;
+          if (Math.abs(dy) > Math.abs(dx)) return;
+          if (dx < 0) {
+            void commitPrint();
+          } else {
+            commitCancel();
+          }
+        },
+      }),
+    [commitPrint, commitCancel]
+  );
 
   const speakPagePrompt = useCallback((page: number) => {
     const label = page === 0 ? 'Hold to start voice input' : 'Hold to start camera';
@@ -275,7 +356,7 @@ export default function HomeScreen() {
   const busy = appState !== 'idle' && appState !== 'done';
 
   const voiceTitle = () => {
-    if (appState === 'recording' || appState === 'confirm_recording') return 'Recording…';
+    if (appState === 'recording') return 'Recording…';
     if (appState === 'processing') return 'Processing…';
     if (appState === 'confirming') return 'Confirming…';
     return 'Voice Input';
@@ -284,6 +365,15 @@ export default function HomeScreen() {
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" />
+      {appState === 'confirming' ? (
+        <View
+          style={[StyleSheet.absoluteFillObject, styles.confirmSwipeOverlay]}
+          {...confirmPanResponder.panHandlers}
+          accessible
+          accessibilityLabel="Swipe left to print, swipe right to cancel"
+          accessibilityRole="none"
+        />
+      ) : null}
       <ScrollView
         ref={scrollRef}
         horizontal
@@ -375,6 +465,7 @@ export default function HomeScreen() {
             {showCamera && permission && permission.granted ? (
               <View style={{ width: 220, height: 220, borderRadius: 16, overflow: 'hidden', backgroundColor: '#222' }}>
                 <ResolvedCameraView
+                  ref={cameraRef}
                   style={{ flex: 1 }}
                   facing="back"
                 />
@@ -396,6 +487,10 @@ export default function HomeScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
+  confirmSwipeOverlay: {
+    zIndex: 100,
+    backgroundColor: 'transparent',
+  },
   scroller: { flex: 1 },
   page: { width: SCREEN_WIDTH, flex: 1 },
   orangePage: { backgroundColor: '#F47B20' },

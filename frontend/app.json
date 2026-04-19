@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "braille-app-2",
-    "slug": "braille-app-2",
+    "name": "braille-label-maker",
+    "slug": "braille-label-maker",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",

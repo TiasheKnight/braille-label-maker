@@ -1,5 +1,5 @@
 {
-  "name": "braille-app-2",
+  "name": "braille-label-maker",
   "version": "1.0.0",
   "main": "index.ts",
   "scripts": {
