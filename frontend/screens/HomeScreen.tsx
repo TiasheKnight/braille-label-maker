@@ -29,7 +29,6 @@ type AppState =
   | 'recording'
   | 'processing'
   | 'confirming'
-  | 'confirm_recording'
   | 'scanning'
   | 'done';
 
@@ -53,7 +52,8 @@ export default function HomeScreen() {
   const [pendingResult, setPendingResult] = useState<PipelineResponse | null>(null);
   const [statusLabel, setStatusLabel] = useState('');
   const [permission, requestPermission] = useCameraPermissions();
-  const [showCamera, setShowCamera] = useState(false);
+  const [tapCount, setTapCount] = useState(0);
+  const [tapTimer, setTapTimer] = useState<NodeJS.Timeout | null>(null);
 
   const ensureAudioPermission = async () => {
     const { status } = await Audio.requestPermissionsAsync();
@@ -172,11 +172,11 @@ export default function HomeScreen() {
 
       if (result.label) {
         setAppState('confirming');
-        setStatusLabel(`"${result.label}" — say Confirm to print`);
-        // Start confirm recording after audio
+        setStatusLabel(`"${result.label}" — tap once to print, twice to cancel`);
+        // Start tap-based confirmation
         setTimeout(() => {
           void startConfirmRecording(result);
-        }, 3000); // Adjust time based on audio length
+        }, 3000); // Wait for audio to finish
       } else {
         setAppState('idle');
         setStatusLabel('');
@@ -224,8 +224,8 @@ export default function HomeScreen() {
 
       if (result.label) {
         setAppState('confirming');
-        setStatusLabel(`"${result.label}" — say Confirm to print`);
-        // Start confirm recording after audio
+        setStatusLabel(`"${result.label}" — tap once to print, twice to cancel`);
+        // Start tap-based confirmation after audio
         setTimeout(() => {
           void startConfirmRecording(result);
         }, 3000);
@@ -247,44 +247,46 @@ export default function HomeScreen() {
 const startConfirmRecording = async (result: PipelineResponse) => {
   if (!result.label) return;
 
-  const label = result.label; // ✅ now guaranteed string
+  setAppState('confirming');
+  setStatusLabel(`"${result.label}" — tap once to print, twice to cancel`);
+  setTapCount(0);
 
-  const ok = await ensureAudioPermission();
-  if (!ok) return;
-
-  setAppState('confirm_recording');
-  setStatusLabel('Say "Confirm" or "Cancel"');
-
-  const confirmRec = new Audio.Recording();
-  await confirmRec.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
-  await confirmRec.startAsync();
-
-  setTimeout(async () => {
-    try {
-      await confirmRec.stopAndUnloadAsync();
-      const uri = confirmRec.getURI();
-      if (!uri) return;
-
-      const confirmation = await sendConfirmation(uri);
-      if (confirmation.confirmed) {
-        const printResult = await sendPrint(label, activePage === 0 ? 'voice' : 'image'); // ✅ pass mode
-
-        await addHistoryEntry({
-          word: label,
-          braille: printResult.braille,
-          brailleDots: printResult.braille_dots,
-          mode: activePage === 0 ? 'voice' : 'image',
-        });
-
-        Speech.speak(`${label} sent to printer.`, { language: 'en' });
-        setStatusLabel('Sent to printer ✓');
-      } else {
-        Speech.speak('Cancelled. Tap to try again.', { language: 'en' });
-        setStatusLabel('Cancelled');
-      }
-    } catch {
-      setStatusLabel('Error — tap to retry');
+  // Auto-print after 8 seconds if no taps
+  const autoPrintTimer = setTimeout(async () => {
+    if (appState === 'confirming') {
+      await printLabel(result.label!);
     }
+  }, 8000);
+
+  setTapTimer(autoPrintTimer);
+};
+
+const handleConfirmTap = async () => {
+  if (appState !== 'confirming' || !pendingResult?.label) return;
+
+  const newTapCount = tapCount + 1;
+  setTapCount(newTapCount);
+
+  if (newTapCount === 1) {
+    // First tap - set timer for 2 seconds
+    Speech.speak('Printing in 2 seconds. Tap again to cancel.', { language: 'en' });
+    setStatusLabel(`"${pendingResult.label}" — printing in 2 seconds...`);
+
+    const printTimer = setTimeout(async () => {
+      if (tapCount === 1) { // Only print if no second tap occurred
+        await printLabel(pendingResult.label!);
+      }
+    }, 2000);
+
+    if (tapTimer) clearTimeout(tapTimer);
+    setTapTimer(printTimer);
+
+  } else if (newTapCount === 2) {
+    // Second tap - cancel immediately
+    if (tapTimer) clearTimeout(tapTimer);
+    setTapTimer(null);
+    Speech.speak('Cancelled. Tap to try again.', { language: 'en' });
+    setStatusLabel('Cancelled');
 
     setTimeout(() => {
       setAppState('idle');
@@ -292,7 +294,32 @@ const startConfirmRecording = async (result: PipelineResponse) => {
       setPendingResult(null);
       setShowCamera(false);
     }, 2000);
-  }, 5000);
+  }
+};
+
+const printLabel = async (label: string) => {
+  try {
+    const printResult = await sendPrint(label, activePage === 0 ? 'voice' : 'image');
+
+    await addHistoryEntry({
+      word: label,
+      braille: printResult.braille,
+      brailleDots: printResult.braille_dots,
+      mode: activePage === 0 ? 'voice' : 'image',
+    });
+
+    Speech.speak(`${label} sent to printer.`, { language: 'en' });
+    setStatusLabel('Sent to printer ✓');
+  } catch {
+    setStatusLabel('Print error — tap to retry');
+  }
+
+  setTimeout(() => {
+    setAppState('idle');
+    setStatusLabel('');
+    setPendingResult(null);
+    setShowCamera(false);
+  }, 2000);
 };
 
   const speakPagePrompt = useCallback((page: number) => {
@@ -304,6 +331,24 @@ const startConfirmRecording = async (result: PipelineResponse) => {
   useEffect(() => {
     speakPagePrompt(0);
   }, [speakPagePrompt]);
+
+  // Cleanup tap timer on unmount or state change
+  useEffect(() => {
+    return () => {
+      if (tapTimer) {
+        clearTimeout(tapTimer);
+      }
+    };
+  }, [tapTimer]);
+
+  // Clear tap timer when leaving confirming state
+  useEffect(() => {
+    if (appState !== 'confirming' && tapTimer) {
+      clearTimeout(tapTimer);
+      setTapTimer(null);
+      setTapCount(0);
+    }
+  }, [appState, tapTimer]);
 
   const handleMomentumScrollEnd = (e: any) => {
     const page = Math.round(e.nativeEvent.contentOffset.x / SCREEN_WIDTH);
@@ -326,7 +371,7 @@ const startConfirmRecording = async (result: PipelineResponse) => {
   const busy = appState !== 'idle' && appState !== 'done';
 
   const voiceTitle = () => {
-    if (appState === 'recording' || appState === 'confirm_recording') return 'Recording…';
+    if (appState === 'recording') return 'Recording…';
     if (appState === 'processing') return 'Processing…';
     if (appState === 'confirming') return 'Confirming…';
     return 'Voice Input';
@@ -351,8 +396,9 @@ const startConfirmRecording = async (result: PipelineResponse) => {
           style={[styles.page, styles.orangePage]}
           onPressIn={handleVoicePressIn}
           onPressOut={handleVoicePressOut}
+          onPress={appState === 'confirming' ? handleConfirmTap : undefined}
           accessible
-          accessibilityLabel="Hold to record and release to finish"
+          accessibilityLabel={appState === 'confirming' ? "Tap once to print, twice to cancel" : "Hold to record and release to finish"}
           accessibilityRole="button"
         >
           {/* History button */}
@@ -400,8 +446,9 @@ const startConfirmRecording = async (result: PipelineResponse) => {
           style={[styles.page, styles.bluePage]}
           onPressIn={handleScanPressIn}
           onPressOut={handleScanPressOut}
+          onPress={appState === 'confirming' ? handleConfirmTap : undefined}
           accessible
-          accessibilityLabel="Hold to start camera and release to finish"
+          accessibilityLabel={appState === 'confirming' ? "Tap once to print, twice to cancel" : "Hold to start camera and release to finish"}
           accessibilityRole="button"
         >
           <TouchableOpacity
