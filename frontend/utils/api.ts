@@ -20,8 +20,8 @@ export async function sendVoiceRecording(audioUri: string): Promise<PipelineResp
   const formData = new FormData();
   formData.append('audio', {
     uri: audioUri,
-    name: 'recording.m4a',
-    type: 'audio/m4a',
+    name: 'recording.wav',
+    type: 'audio/wav',
   } as any);
 
   const response = await fetch(`${BASE_URL}/audio_pipeline`, {
@@ -54,8 +54,8 @@ export async function sendConfirmation(audioUri: string): Promise<ConfirmRespons
   const formData = new FormData();
   formData.append('audio', {
     uri: audioUri,
-    name: 'confirm.m4a',
-    type: 'audio/m4a',
+    name: 'confirm.wav',
+    type: 'audio/wav',
   } as any);
 
   const response = await fetch(`${BASE_URL}/confirm`, {

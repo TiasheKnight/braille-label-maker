@@ -7,7 +7,6 @@ import os
 import torch
 import asyncio
 from flask_cors import CORS
-import base64
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -208,6 +207,13 @@ def print_label():
 @app.route("/ping", methods=["GET"])
 def ping():
     return jsonify({"status": "ok"})
+
+# -------------------------
+# TEST ROUTE
+# -------------------------
+@app.route("/test", methods=["GET"])
+def test():
+    return jsonify({"status": "test ok"})
 
 # -------------------------
 # CONFIRM ROUTE
