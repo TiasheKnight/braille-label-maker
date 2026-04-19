@@ -202,9 +202,9 @@ def generate_label(objects, speech_text):
         raise ValueError("Cannot use both objects and speech_text - use one or the other")
     
     if objects:
-        prompt = f"Create a one to three word label for the following objects: {', '.join(objects)}."
+        prompt = f"Create a one to three word label to generalize the following objects: {', '.join(objects)}."
     elif speech_text:
-        prompt = f"Create a one to three word label that summarises:{speech_text}."
+        prompt = f"Create a one to three word label that summarises the following speech: {speech_text}."
     else:
         raise ValueError("Must provide either objects or speech_text")
 
