@@ -252,13 +252,6 @@ def confirm():
     confirmed = "yes" in speech.lower() or "confirm" in speech.lower()
     return jsonify({"confirmed": confirmed})
 
-# # -------------------------
-# # TEST ROUTE
-# # -------------------------
-@app.route("/test", methods=["GET"])
-def test():
-    return jsonify({"status": "test ok"})
-
 # -------------------------
 # RUN
 # -------------------------
