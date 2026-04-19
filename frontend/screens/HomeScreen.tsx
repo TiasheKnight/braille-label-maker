@@ -86,6 +86,9 @@ export default function HomeScreen() {
     setStatusLabel('Listening… release to send');
     setAppState('recording');
 
+    // Wait 5 seconds for speech to finish and phone to settle before recording
+    await new Promise(resolve => setTimeout(resolve, 5000));
+
     const recording = new Audio.Recording();
     await recording.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
     await recording.startAsync();
@@ -208,6 +211,7 @@ export default function HomeScreen() {
       const photo = await cameraRef.current?.takePictureAsync();
       if (!photo?.uri) throw new Error('No photo taken');
 
+      setShowCamera(false);
       setAppState('processing');
       setStatusLabel('Processing…');
 
@@ -230,7 +234,6 @@ export default function HomeScreen() {
         setAppState('idle');
         setStatusLabel('');
         setPendingResult(null);
-        setShowCamera(false);
       }
     } catch (err) {
       console.error(err);
@@ -289,7 +292,7 @@ const startConfirmRecording = async (result: PipelineResponse) => {
       setPendingResult(null);
       setShowCamera(false);
     }, 2000);
-  }, 3000);
+}, 3000);
 };
 
   const speakPagePrompt = useCallback((page: number) => {

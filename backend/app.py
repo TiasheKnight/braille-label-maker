@@ -106,24 +106,39 @@ def speech_to_text(audio_path):
 
 
 def generate_label(objects, speech_text):
-    prompt = f"""
-Objects detected: {objects}
-User speech: "{speech_text}"
-
-Return ONLY a short label (max 8 words).
-No explanation.
-"""
+    # Enforce: use EITHER objects OR speech_text, not both
+    if objects and speech_text:
+        raise ValueError("Cannot use both objects and speech_text - use one or the other")
+    
+    if objects:
+        prompt = f"Create a one to three word label for the following objects: {', '.join(objects)}."
+    elif speech_text:
+        prompt = f"Create a one to three word label that summarises:{speech_text}."
+    else:
+        raise ValueError("Must provide either objects or speech_text")
 
     inputs = tokenizer(prompt, return_tensors="pt").to("cuda")
+    input_length = inputs["input_ids"].shape[1]
 
     outputs = llm_model.generate(
         **inputs,
-        max_new_tokens=20,
-        do_sample=False
+        max_new_tokens=15,
+        do_sample=False,
+        eos_token_id=tokenizer.eos_token_id,
+        pad_token_id=tokenizer.eos_token_id
     )
 
-    new_tokens = outputs.sequences[0][inputs.input_ids.shape[1]:]
-    return tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
+    # Handle both Tensor and dict-like outputs
+    if isinstance(outputs, torch.Tensor):
+        sequences = outputs.cpu()
+    else:
+        sequences = outputs.sequences.cpu()
+    
+    new_tokens = sequences[0][input_length:]
+    label = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
+    # Clean up any trailing punctuation or weird characters
+    label = label.split('\n')[0].strip()
+    return label
 
 
 async def tts_async(text, output_file="output.mp3"):
