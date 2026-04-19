@@ -1,5 +1,5 @@
 // ← Swap this with your teammate's actual URL
-const BASE_URL = 'http://https://superaffluent-jurnee-unrestrainedly.ngrok-free.dev/5000';
+const BASE_URL = 'http://165.245.138.5:5000';
 
 export interface PipelineResponse {
   audio: string; // base64
