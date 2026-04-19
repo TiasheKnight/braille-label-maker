@@ -21,6 +21,7 @@ import * as Speech from 'expo-speech';
 import { Ionicons } from '@expo/vector-icons';
 import { RootStackParamList } from '../App';
 import { sendVoiceRecording, sendImage, sendPrint, PipelineResponse } from '../utils/api';
+import { addHistoryEntry } from '../utils/history';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -48,8 +49,6 @@ export default function HomeScreen() {
   const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const holdModeRef = useRef<HoldMode | null>(null);
   const isSwipingRef = useRef(false);
-  const appStateRef = useRef<AppState>('idle');
-  const cameraReadyRef = useRef(false);
   const [activePage, setActivePage] = useState(0);
   const [appState, setAppState] = useState<AppState>('idle');
   const [pendingResult, setPendingResult] = useState<PipelineResponse | null>(null);
@@ -67,9 +66,6 @@ export default function HomeScreen() {
   useEffect(() => {
     activePageRef.current = activePage;
   }, [activePage]);
-  useEffect(() => {
-    appStateRef.current = appState;
-  }, [appState]);
 
   const ensureAudioPermission = async () => {
     const { status } = await Audio.requestPermissionsAsync();
@@ -93,61 +89,44 @@ export default function HomeScreen() {
   }, []);
 
   const startVoiceRecording = useCallback(async () => {
-    if (appStateRef.current !== 'idle' && appStateRef.current !== 'done') return;
+    if (appState !== 'idle' && appState !== 'done') return;
 
     const ok = await ensureAudioPermission();
     if (!ok) return;
 
-    Speech.stop();
+    Speech.speak('Recording started. Release to finish and send.', { language: 'en' });
     setStatusLabel('Listening… release to send');
-    appStateRef.current = 'recording';
     setAppState('recording');
 
-    // Short settle time so Pressable / audio session are ready (do not block release handling for seconds)
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    // Wait 5 seconds for speech to finish and phone to settle before recording
+    await new Promise(resolve => setTimeout(resolve, 5000));
 
-    if (appStateRef.current !== 'recording') {
-      return;
-    }
-
-    try {
-      const recording = new Audio.Recording();
-      await recording.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
-      await recording.startAsync();
-      recordingRef.current = recording;
-    } catch (e) {
-      console.error(e);
-      appStateRef.current = 'idle';
-      setAppState('idle');
-      setStatusLabel('');
-      Speech.speak('Could not start recording. Try again.', { language: 'en' });
-    }
-  }, []);
+    const recording = new Audio.Recording();
+    await recording.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+    await recording.startAsync();
+    recordingRef.current = recording;
+  }, [appState]);
 
   const startScanSensor = useCallback(async () => {
-    if (appStateRef.current !== 'idle' && appStateRef.current !== 'done') return;
-
-    if (!permission?.granted) {
+    if (appState !== 'idle' && appState !== 'done') return;
+    if (!permission || !permission.granted) {
       const { status } = await requestPermission();
       if (status !== 'granted') {
         Alert.alert('Permission needed', 'Camera access is required.');
         return;
       }
     }
-
-    cameraReadyRef.current = false;
     Speech.stop();
+    Speech.speak('Camera activated. Release to take photo.', { language: 'en' });
     setShowCamera(true);
-    appStateRef.current = 'scanning';
     setAppState('scanning');
-    setStatusLabel('Release to capture photo');
-    Speech.speak('Release to capture.', { language: 'en' });
-  }, [permission, requestPermission]);
+    setStatusLabel('Camera activated… release to take photo');
+  }, [appState, permission, requestPermission]);
 
   const scheduleHoldStart = useCallback(
     (mode: HoldMode) => {
       if (isSwipingRef.current) return;
-      if (appStateRef.current !== 'idle' && appStateRef.current !== 'done') return;
+      if (appState !== 'idle' && appState !== 'done') return;
 
       cancelPendingHold();
       holdModeRef.current = mode;
@@ -159,13 +138,13 @@ export default function HomeScreen() {
         if (mode === 'voice') {
           void startVoiceRecording();
         } else {
-          void startScanSensor();
+          startScanSensor();
         }
 
         holdTimerRef.current = null;
       }, HOLD_DELAY_MS);
     },
-    [cancelPendingHold, startVoiceRecording, startScanSensor]
+    [appState, cancelPendingHold, startVoiceRecording, startScanSensor]
   );
 
   const handleVoicePressIn = useCallback(() => {
@@ -182,15 +161,7 @@ export default function HomeScreen() {
       return;
     }
 
-    if (appStateRef.current !== 'recording') return;
-
-    if (!recordingRef.current) {
-      Speech.stop();
-      appStateRef.current = 'idle';
-      setAppState('idle');
-      setStatusLabel('');
-      return;
-    }
+    if (appState !== 'recording' || !recordingRef.current) return;
 
     const recording = recordingRef.current;
     recordingRef.current = null;
@@ -228,7 +199,7 @@ export default function HomeScreen() {
       setStatusLabel('');
       Speech.speak('Something went wrong. Hold to try again.', { language: 'en' });
     }
-  }, [cancelPendingHold]);
+  }, [appState, cancelPendingHold]);
 
   const handleScanPressIn = useCallback(() => {
     if (activePage !== 1) return;
@@ -245,15 +216,9 @@ export default function HomeScreen() {
       return;
     }
 
-    if (appStateRef.current !== 'scanning') return;
+    if (appState !== 'scanning') return;
 
     try {
-      const maxAttempts = 8;
-      for (let i = 0; i < maxAttempts; i++) {
-        if (cameraReadyRef.current && cameraRef.current) break;
-        await new Promise((r) => setTimeout(r, 100));
-      }
-
       const photo = await cameraRef.current?.takePictureAsync();
       if (!photo?.uri) throw new Error('No photo taken');
 
@@ -287,7 +252,7 @@ export default function HomeScreen() {
       setShowCamera(false);
       Speech.speak('Something went wrong. Hold to try again.', { language: 'en' });
     }
-  }, [cancelPendingHold]);
+  }, [appState, cancelPendingHold]);
 
   const resetAfterConfirm = useCallback(() => {
     setTimeout(() => {
@@ -314,7 +279,13 @@ export default function HomeScreen() {
     Speech.stop();
 
     try {
-      await sendPrint(label, mode);
+      const printResult = await sendPrint(label, mode);
+      await addHistoryEntry({
+        word: label,
+        braille: printResult.braille,
+        brailleDots: printResult.braille_dots,
+        mode: page === 0 ? 'voice' : 'image',
+      });
       Speech.speak('Printed.', { language: 'en' });
       setStatusLabel('Sent to printer ✓');
     } catch {
@@ -363,12 +334,6 @@ export default function HomeScreen() {
   useEffect(() => {
     speakPagePrompt(0);
   }, [speakPagePrompt]);
-
-  useEffect(() => {
-    if (activePage === 1) {
-      void requestPermission();
-    }
-  }, [activePage, requestPermission]);
 
   const handleMomentumScrollEnd = (e: any) => {
     const page = Math.round(e.nativeEvent.contentOffset.x / SCREEN_WIDTH);
@@ -503,9 +468,6 @@ export default function HomeScreen() {
                   ref={cameraRef}
                   style={{ flex: 1 }}
                   facing="back"
-                  onCameraReady={() => {
-                    cameraReadyRef.current = true;
-                  }}
                 />
               </View>
             ) : (
