@@ -1,4 +1,4 @@
-import React, { useRef, useState, useCallback, useEffect } from 'react';
+import React, { useRef, useState, useCallback, useEffect, useMemo } from 'react';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import {
   View,
@@ -11,6 +11,7 @@ import {
   StatusBar,
   ActivityIndicator,
   Alert,
+  PanResponder,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -19,7 +20,7 @@ import { Audio } from 'expo-av';
 import * as Speech from 'expo-speech';
 import { Ionicons } from '@expo/vector-icons';
 import { RootStackParamList } from '../App';
-import { sendVoiceRecording, sendImage, sendConfirmation, sendPrint, PipelineResponse } from '../utils/api';
+import { sendVoiceRecording, sendImage, sendPrint, PipelineResponse } from '../utils/api';
 import { addHistoryEntry } from '../utils/history';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -36,6 +37,7 @@ type Nav = NativeStackNavigationProp<RootStackParamList, 'Home'>;
 type HoldMode = 'voice' | 'scan';
 
 const HOLD_DELAY_MS = 1000;
+const CONFIRM_SWIPE_THRESHOLD = 72;
 const ResolvedCameraView: any = (CameraView as any)?.default ?? (CameraView as any);
 
 export default function HomeScreen() {
@@ -52,8 +54,18 @@ export default function HomeScreen() {
   const [pendingResult, setPendingResult] = useState<PipelineResponse | null>(null);
   const [statusLabel, setStatusLabel] = useState('');
   const [permission, requestPermission] = useCameraPermissions();
-  const [tapCount, setTapCount] = useState(0);
-  const [tapTimer, setTapTimer] = useState<NodeJS.Timeout | null>(null);
+  const [showCamera, setShowCamera] = useState(false);
+
+  const pendingResultRef = useRef<PipelineResponse | null>(null);
+  const activePageRef = useRef(0);
+  const confirmHandledRef = useRef(false);
+
+  useEffect(() => {
+    pendingResultRef.current = pendingResult;
+  }, [pendingResult]);
+  useEffect(() => {
+    activePageRef.current = activePage;
+  }, [activePage]);
 
   const ensureAudioPermission = async () => {
     const { status } = await Audio.requestPermissionsAsync();
@@ -172,11 +184,10 @@ export default function HomeScreen() {
 
       if (result.label) {
         setAppState('confirming');
-        setStatusLabel(`"${result.label}" — tap once to print, twice to cancel`);
-        // Start tap-based confirmation
+        setStatusLabel(`"${result.label}" — swipe left to print, right to cancel`);
         setTimeout(() => {
-          void startConfirmRecording(result);
-        }, 3000); // Wait for audio to finish
+          Speech.speak('Swipe left to print. Swipe right to cancel.', { language: 'en' });
+        }, 3000);
       } else {
         setAppState('idle');
         setStatusLabel('');
@@ -224,10 +235,9 @@ export default function HomeScreen() {
 
       if (result.label) {
         setAppState('confirming');
-        setStatusLabel(`"${result.label}" — tap once to print, twice to cancel`);
-        // Start tap-based confirmation after audio
+        setStatusLabel(`"${result.label}" — swipe left to print, right to cancel`);
         setTimeout(() => {
-          void startConfirmRecording(result);
+          Speech.speak('Swipe left to print. Swipe right to cancel.', { language: 'en' });
         }, 3000);
       } else {
         setAppState('idle');
@@ -244,83 +254,76 @@ export default function HomeScreen() {
     }
   }, [appState, cancelPendingHold]);
 
-const startConfirmRecording = async (result: PipelineResponse) => {
-  if (!result.label) return;
-
-  setAppState('confirming');
-  setStatusLabel(`"${result.label}" — tap once to print, twice to cancel`);
-  setTapCount(0);
-
-  // Auto-print after 8 seconds if no taps
-  const autoPrintTimer = setTimeout(async () => {
-    if (appState === 'confirming') {
-      await printLabel(result.label!);
-    }
-  }, 8000);
-
-  setTapTimer(autoPrintTimer);
-};
-
-const handleConfirmTap = async () => {
-  if (appState !== 'confirming' || !pendingResult?.label) return;
-
-  const newTapCount = tapCount + 1;
-  setTapCount(newTapCount);
-
-  if (newTapCount === 1) {
-    // First tap - set timer for 2 seconds
-    Speech.speak('Printing in 2 seconds. Tap again to cancel.', { language: 'en' });
-    setStatusLabel(`"${pendingResult.label}" — printing in 2 seconds...`);
-
-    const printTimer = setTimeout(async () => {
-      if (tapCount === 1) { // Only print if no second tap occurred
-        await printLabel(pendingResult.label!);
-      }
-    }, 2000);
-
-    if (tapTimer) clearTimeout(tapTimer);
-    setTapTimer(printTimer);
-
-  } else if (newTapCount === 2) {
-    // Second tap - cancel immediately
-    if (tapTimer) clearTimeout(tapTimer);
-    setTapTimer(null);
-    Speech.speak('Cancelled. Tap to try again.', { language: 'en' });
-    setStatusLabel('Cancelled');
-
+  const resetAfterConfirm = useCallback(() => {
     setTimeout(() => {
       setAppState('idle');
       setStatusLabel('');
       setPendingResult(null);
       setShowCamera(false);
+      confirmHandledRef.current = false;
     }, 2000);
-  }
-};
+  }, []);
 
-const printLabel = async (label: string) => {
-  try {
-    const printResult = await sendPrint(label, activePage === 0 ? 'voice' : 'image');
+  const commitPrint = useCallback(async () => {
+    if (confirmHandledRef.current) return;
+    const result = pendingResultRef.current;
+    if (!result?.label) return;
+    confirmHandledRef.current = true;
 
-    await addHistoryEntry({
-      word: label,
-      braille: printResult.braille,
-      brailleDots: printResult.braille_dots,
-      mode: activePage === 0 ? 'voice' : 'image',
-    });
+    const label = result.label;
+    const page = activePageRef.current;
+    const mode = page === 0 ? 'voice' : 'image';
 
-    Speech.speak(`${label} sent to printer.`, { language: 'en' });
-    setStatusLabel('Sent to printer ✓');
-  } catch {
-    setStatusLabel('Print error — tap to retry');
-  }
+    setAppState('processing');
+    setStatusLabel('Printing…');
+    Speech.stop();
 
-  setTimeout(() => {
-    setAppState('idle');
-    setStatusLabel('');
-    setPendingResult(null);
-    setShowCamera(false);
-  }, 2000);
-};
+    try {
+      const printResult = await sendPrint(label, mode);
+      await addHistoryEntry({
+        word: label,
+        braille: printResult.braille,
+        brailleDots: printResult.braille_dots,
+        mode: page === 0 ? 'voice' : 'image',
+      });
+      Speech.speak('Printed.', { language: 'en' });
+      setStatusLabel('Sent to printer ✓');
+    } catch {
+      Speech.speak('Print failed. Try again.', { language: 'en' });
+      setStatusLabel('Error — tap to retry');
+    }
+
+    resetAfterConfirm();
+  }, [resetAfterConfirm]);
+
+  const commitCancel = useCallback(() => {
+    if (confirmHandledRef.current) return;
+    confirmHandledRef.current = true;
+    Speech.stop();
+    Speech.speak('Cancelled.', { language: 'en' });
+    setStatusLabel('Cancelled');
+    resetAfterConfirm();
+  }, [resetAfterConfirm]);
+
+  const confirmPanResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: (_, gestureState) =>
+          Math.abs(gestureState.dx) > 10 || Math.abs(gestureState.dy) > 10,
+        onPanResponderRelease: (_, gestureState) => {
+          const { dx, dy } = gestureState;
+          if (Math.abs(dx) < CONFIRM_SWIPE_THRESHOLD) return;
+          if (Math.abs(dy) > Math.abs(dx)) return;
+          if (dx < 0) {
+            void commitPrint();
+          } else {
+            commitCancel();
+          }
+        },
+      }),
+    [commitPrint, commitCancel]
+  );
 
   const speakPagePrompt = useCallback((page: number) => {
     const label = page === 0 ? 'Hold to start voice input' : 'Hold to start camera';
@@ -331,24 +334,6 @@ const printLabel = async (label: string) => {
   useEffect(() => {
     speakPagePrompt(0);
   }, [speakPagePrompt]);
-
-  // Cleanup tap timer on unmount or state change
-  useEffect(() => {
-    return () => {
-      if (tapTimer) {
-        clearTimeout(tapTimer);
-      }
-    };
-  }, [tapTimer]);
-
-  // Clear tap timer when leaving confirming state
-  useEffect(() => {
-    if (appState !== 'confirming' && tapTimer) {
-      clearTimeout(tapTimer);
-      setTapTimer(null);
-      setTapCount(0);
-    }
-  }, [appState, tapTimer]);
 
   const handleMomentumScrollEnd = (e: any) => {
     const page = Math.round(e.nativeEvent.contentOffset.x / SCREEN_WIDTH);
@@ -380,6 +365,15 @@ const printLabel = async (label: string) => {
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" />
+      {appState === 'confirming' ? (
+        <View
+          style={[StyleSheet.absoluteFillObject, styles.confirmSwipeOverlay]}
+          {...confirmPanResponder.panHandlers}
+          accessible
+          accessibilityLabel="Swipe left to print, swipe right to cancel"
+          accessibilityRole="none"
+        />
+      ) : null}
       <ScrollView
         ref={scrollRef}
         horizontal
@@ -396,9 +390,8 @@ const printLabel = async (label: string) => {
           style={[styles.page, styles.orangePage]}
           onPressIn={handleVoicePressIn}
           onPressOut={handleVoicePressOut}
-          onPress={appState === 'confirming' ? handleConfirmTap : undefined}
           accessible
-          accessibilityLabel={appState === 'confirming' ? "Tap once to print, twice to cancel" : "Hold to record and release to finish"}
+          accessibilityLabel="Hold to record and release to finish"
           accessibilityRole="button"
         >
           {/* History button */}
@@ -446,9 +439,8 @@ const printLabel = async (label: string) => {
           style={[styles.page, styles.bluePage]}
           onPressIn={handleScanPressIn}
           onPressOut={handleScanPressOut}
-          onPress={appState === 'confirming' ? handleConfirmTap : undefined}
           accessible
-          accessibilityLabel={appState === 'confirming' ? "Tap once to print, twice to cancel" : "Hold to start camera and release to finish"}
+          accessibilityLabel="Hold to start camera and release to finish"
           accessibilityRole="button"
         >
           <TouchableOpacity
@@ -495,6 +487,10 @@ const printLabel = async (label: string) => {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
+  confirmSwipeOverlay: {
+    zIndex: 100,
+    backgroundColor: 'transparent',
+  },
   scroller: { flex: 1 },
   page: { width: SCREEN_WIDTH, flex: 1 },
   orangePage: { backgroundColor: '#F47B20' },
