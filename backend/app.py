@@ -10,9 +10,18 @@ import base64
 from flask_cors import CORS
 import sqlite3
 from datetime import datetime
+import json
+import urllib.request
+import urllib.parse
+import secrets
 
 app = Flask(__name__)
 CORS(app)
+
+# Shared with ESP32 (BRAILLE_PRINT_SECRET in secrets.h). Used as part 1 of the two-part print handshake.
+PRINT_SECRET = os.environ.get("BRAILLE_PRINT_SECRET", "dev-braille-print-secret")
+# Optional: POST two-part job to ESP32 after each confirmed print, e.g. http://192.168.1.50/print-job
+ESP32_PRINT_URL = os.environ.get("ESP32_PRINT_URL", "").strip()
 
 # -------------------------
 # LOAD MODELS (once!)
@@ -97,25 +106,62 @@ braille_patterns = {
 # ENCODE TO BRAILLE
 # -------------------------
 def encode_to_braille(text):
+    """Each character -> [[left_col],[right_col]] with three dots each (rows 1-3, 4-6)."""
     result = []
     unicode_braille = ""
     braille_dots = ""
     for char in text.lower():
-        if char in braille_patterns:
-            bits = braille_patterns[char]
-            left = bits[:3]
-            right = bits[3:]
-            result.append([left, right])
-            # unicode
-            dot_nums = [i+1 for i,b in enumerate(bits) if b]
-            val = sum(1 << (i-1) for i in dot_nums)
-            unicode_braille += chr(0x2800 + val)
-            # dots
-            dots = "-".join(str(i+1) for i,b in enumerate(bits) if b)
-            if braille_dots:
-                braille_dots += " "
-            braille_dots += dots
+        if char not in braille_patterns:
+            continue
+        cell = braille_patterns[char]
+        left = cell[0]
+        right = cell[1]
+        result.append([left, right])
+        flat = left + right
+        dot_nums = [i + 1 for i, b in enumerate(flat) if b]
+        val = sum(1 << (i - 1) for i in dot_nums)
+        unicode_braille += chr(0x2800 + val)
+        dots = "-".join(str(i) for i in dot_nums)
+        if braille_dots:
+            braille_dots += " "
+        braille_dots += dots
     return result, unicode_braille, braille_dots
+
+
+def log_and_push_esp32_two_part(label, mode, cells):
+    """
+    Part 1: print_code (shared secret). Part 2: braille cell arrays for ESP32.
+    Logs both to the terminal; optionally POSTs to ESP32_PRINT_URL.
+    """
+    nonce = secrets.token_hex(8)
+    payload = {
+        "print_code": PRINT_SECRET,
+        "request_id": nonce,
+        "label": label,
+        "mode": mode,
+        "cells": cells,
+    }
+    print("[PRINT] ---------- two-part ESP32 job ----------")
+    print(f"[PRINT] part_1_print_code (secret): {PRINT_SECRET}")
+    print(f"[PRINT] part_2_braille_cells (pattern arrays): {json.dumps(cells)}")
+    print(f"[PRINT] meta: label={label!r} mode={mode} request_id={nonce}")
+    print("[PRINT] ----------------------------------------")
+    if not ESP32_PRINT_URL:
+        print("[PRINT] ESP32_PRINT_URL not set; skipping HTTP push to device.")
+        return
+    try:
+        form = urllib.parse.urlencode({"payload": json.dumps(payload)}).encode("utf-8")
+        req = urllib.request.Request(
+            ESP32_PRINT_URL,
+            data=form,
+            method="POST",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+            print(f"[PRINT] ESP32 response ({resp.status}): {body[:500]}")
+    except Exception as e:
+        print(f"[PRINT] ESP32 push failed: {e}")
 
 # -------------------------
 # FUNCTIONS
@@ -271,12 +317,13 @@ def print_label():
         return jsonify({"error": "No label provided"}), 400
 
     encoded, braille, braille_dots = encode_to_braille(label)
-    
+
+    log_and_push_esp32_two_part(label, mode, encoded)
+
     # Save to database
     save_label(label, braille, braille_dots, mode)
     print(f"[PRINT] Saved label to database: {label} ({mode})")
-    
-    # TODO: Send encoded to ESP32 for printing
+
     return jsonify({"encoded": encoded, "braille": braille, "braille_dots": braille_dots})
 
 
