@@ -16,12 +16,11 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { Audio } from 'expo-av';
+import { Audio, InterruptionModeAndroid, InterruptionModeIOS } from 'expo-av';
 import * as Speech from 'expo-speech';
 import { Ionicons } from '@expo/vector-icons';
 import { RootStackParamList } from '../App';
 import { sendVoiceRecording, sendImage, sendPrint, PipelineResponse } from '../utils/api';
-import { addHistoryEntry } from '../utils/history';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -78,6 +77,22 @@ export default function HomeScreen() {
       playsInSilentModeIOS: true,
     });
     return true;
+  };
+
+  /**
+   * Recording uses allowsRecordingIOS: true. On iOS that can route playback to the earpiece
+   * (quiet). Switch to playback mode before playing pipeline MP3 so TTS uses the main speaker.
+   */
+  const preparePlaybackAudioMode = async () => {
+    await Audio.setAudioModeAsync({
+      allowsRecordingIOS: false,
+      playsInSilentModeIOS: true,
+      staysActiveInBackground: false,
+      interruptionModeIOS: InterruptionModeIOS.MixWithOthers,
+      interruptionModeAndroid: InterruptionModeAndroid.DuckOthers,
+      shouldDuckAndroid: true,
+      playThroughEarpieceAndroid: false,
+    });
   };
 
   const cancelPendingHold = useCallback(() => {
@@ -177,7 +192,7 @@ export default function HomeScreen() {
       const result = await sendVoiceRecording(uri);
       setPendingResult(result);
 
-      // Play the audio
+      await preparePlaybackAudioMode();
       const sound = new Audio.Sound();
       await sound.loadAsync({ uri: `data:audio/mp3;base64,${result.audio}` });
       await sound.playAsync();
@@ -228,7 +243,7 @@ export default function HomeScreen() {
       const result = await sendImage(photo.uri);
       setPendingResult(result);
 
-      // Play the audio
+      await preparePlaybackAudioMode();
       const sound = new Audio.Sound();
       await sound.loadAsync({ uri: `data:audio/mp3;base64,${result.audio}` });
       await sound.playAsync();
@@ -279,13 +294,7 @@ export default function HomeScreen() {
     Speech.stop();
 
     try {
-      const printResult = await sendPrint(label, mode);
-      await addHistoryEntry({
-        word: label,
-        braille: printResult.braille,
-        brailleDots: printResult.braille_dots,
-        mode: page === 0 ? 'voice' : 'image',
-      });
+      await sendPrint(label, mode);
       Speech.speak('Printed.', { language: 'en' });
       setStatusLabel('Sent to printer ✓');
     } catch {
