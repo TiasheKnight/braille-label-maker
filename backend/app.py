@@ -180,15 +180,19 @@ def detect_objects(image_path):
         all_detections.append(f"{obj_name} ({conf:.2f})")
     print(f"[IMAGE] All detections: {all_detections}")
 
-    # Filter by confidence threshold (only keep detections > 0.3 for now, can adjust)
-    objects_with_conf = []
-    for cls, conf in zip(classes, confidences):
-        if conf > 0.3:  # Lower threshold to see more detections
-            objects_with_conf.append(names[int(cls)])
-
-    objects = list(set(objects_with_conf))
-    print(f"[IMAGE] Filtered objects (conf > 0.3): {objects}")
-    return objects
+    # Filter by confidence; unique names in descending confidence order
+    pairs = sorted(zip(classes, confidences), key=lambda p: p[1], reverse=True)
+    seen = set()
+    objects_ordered = []
+    for cls, conf in pairs:
+        if conf <= 0.3:
+            continue
+        name = names[int(cls)]
+        if name not in seen:
+            seen.add(name)
+            objects_ordered.append(name)
+    print(f"[IMAGE] Filtered objects (conf > 0.3): {objects_ordered}")
+    return objects_ordered
 
 
 def speech_to_text(audio_path):
@@ -196,39 +200,66 @@ def speech_to_text(audio_path):
     return " ".join([seg.text for seg in segments])
 
 
-def generate_label(objects, speech_text):
-    # Enforce: use EITHER objects OR speech_text, not both
-    if objects and speech_text:
-        raise ValueError("Cannot use both objects and speech_text - use one or the other")
-    
-    if objects:
-        prompt = f"Create a one to three word label to generalize the following objects: {', '.join(objects)}."
-    elif speech_text:
-        prompt = f"Create a one to three word label that summarises the following speech: {speech_text}."
-    else:
-        raise ValueError("Must provide either objects or speech_text")
+def label_from_detections(objects):
+    """
+    Build a short label from YOLO class names. No LLM — Phi-2 with a plain prompt often
+    emits template junk (e.g. '## INPUT') and detections are already human-readable names.
+    """
+    if not objects:
+        return ""
+    parts = []
+    for o in objects:
+        if not o:
+            continue
+        s = str(o).replace("_", " ").strip()
+        if s and s not in parts:
+            parts.append(s)
+    if not parts:
+        return ""
+    if len(parts) == 1:
+        return parts[0]
+    if len(parts) == 2:
+        return f"{parts[0]} and {parts[1]}"
+    # Cap at ~3 short phrases for braille / TTS
+    return ", ".join(parts[:3])
+
+
+def generate_label_from_speech(speech_text):
+    """Phi-2: use instruction format so output is a label, not chat/template tokens."""
+    if not speech_text or not speech_text.strip():
+        raise ValueError("Must provide non-empty speech_text")
+
+    prompt = (
+        "### Instruction:\n"
+        "Write a short label of one to three words that summarizes the following speech. "
+        "Reply with only the label words, no quotes or punctuation.\n\n"
+        f"Speech: {speech_text.strip()}\n\n"
+        "### Response:\n"
+    )
 
     inputs = tokenizer(prompt, return_tensors="pt").to("cuda")
     input_length = inputs["input_ids"].shape[1]
 
     outputs = llm_model.generate(
         **inputs,
-        max_new_tokens=15,
+        max_new_tokens=24,
         do_sample=False,
         eos_token_id=tokenizer.eos_token_id,
-        pad_token_id=tokenizer.eos_token_id
+        pad_token_id=tokenizer.eos_token_id,
     )
 
-    # Handle both Tensor and dict-like outputs
     if isinstance(outputs, torch.Tensor):
         sequences = outputs.cpu()
     else:
         sequences = outputs.sequences.cpu()
-    
+
     new_tokens = sequences[0][input_length:]
     label = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
-    # Clean up any trailing punctuation or weird characters
-    label = label.split('\n')[0].strip()
+    label = label.split("\n")[0].strip()
+    # Strip common Phi-2 artifacts
+    for bad in ("###", "##", "Instruction:", "Response:"):
+        if label.lower().startswith(bad.lower()):
+            label = label.split(":", 1)[-1].strip()
     return label
 
 
@@ -270,8 +301,8 @@ def image_pipeline():
             audio_file = text_to_speech("No objects detected. Please try voice input instead.")
             return jsonify({"audio": audio_file, "label": None, "suggestion": "voice"})
 
-        label = generate_label(objects, "")
-        print(f"[IMAGE] Generated label: {label}")
+        label = label_from_detections(objects)
+        print(f"[IMAGE] Label from detections: {label}")
         audio_file = text_to_speech(f"is this a {label}")
         return jsonify({"audio": audio_file, "label": label})
     except Exception as e:
@@ -299,7 +330,7 @@ def audio_pipeline():
             audio_file = text_to_speech("please try again")
             return jsonify({"audio": audio_file, "label": None})
 
-        label = generate_label([], speech)
+        label = generate_label_from_speech(speech)
         print(f"[AUDIO] Generated label: {label}")
         audio_file = text_to_speech(f"is this a {label}")
         return jsonify({"audio": audio_file, "label": label})
