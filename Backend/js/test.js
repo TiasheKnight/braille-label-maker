@@ -2,78 +2,69 @@ const axios = require("axios");
 const fs = require("fs");
 const FormData = require("form-data");
 
-const BASE_URL = "http://127.0.0.1:5000";
+const BASE_URL = "http://165.245.138.5:5000";
 
 // ------------------
-// TEST IMAGE DETECTION
+// TEST IMAGE PIPELINE
 // ------------------
-async function testDetect() {
+async function testImagePipeline() {
     const form = new FormData();
     form.append("image", fs.createReadStream("test.jpg"));
 
-    const res = await axios.post(`${BASE_URL}/detect`, form, {
+    const res = await axios.post(`${BASE_URL}/image_pipeline`, form, {
         headers: form.getHeaders()
     });
 
-    console.log("Detect:", res.data);
+    console.log("Image Pipeline:", res.data);
 }
 
 // ------------------
-// TEST SPEECH
+// TEST AUDIO PIPELINE
 // ------------------
-async function testTranscribe() {
+async function testAudioPipeline() {
     const form = new FormData();
     form.append("audio", fs.createReadStream("audio.m4a"));
 
-    const res = await axios.post(`${BASE_URL}/transcribe`, form, {
+    const res = await axios.post(`${BASE_URL}/audio_pipeline`, form, {
         headers: form.getHeaders()
     });
 
-    console.log("Speech:", res.data);
+    console.log("Audio Pipeline:", res.data);
 }
 
 // ------------------
-// TEST LLM
+// TEST CONFIRM
 // ------------------
-async function testLabel() {
-    const res = await axios.post(`${BASE_URL}/label`, {
-        prompt: "Generate a suitable label for the following object:these are my pills"
-    });
-
-    console.log("Label:", res.data);
-}
-
-// ------------------
-// TEST TTS
-// ------------------
-async function testTTS() {
-    const res = await axios.post(`${BASE_URL}/tts`, {
-        text: "These are medicines"
-    });
-
-    console.log("TTS:", res.data);
-}
-
-// ------------------
-// FULL PIPELINE
-// ------------------
-async function testPipeline() {
+async function testConfirm() {
     const form = new FormData();
-    form.append("image", fs.createReadStream("test.jpg"));
-    form.append("audio", fs.createReadStream("audio.m4a"));
+    form.append("audio", fs.createReadStream("confirm.m4a"));
 
-    const res = await axios.post(`${BASE_URL}/pipeline`, form, {
+    const res = await axios.post(`${BASE_URL}/confirm`, form, {
         headers: form.getHeaders()
     });
 
-    console.log("Pipeline:", res.data);
+    console.log("Confirm:", res.data);
+}
+
+// ------------------
+// TEST PRINT
+// ------------------
+async function testPrint() {
+    const res = await axios.post(`${BASE_URL}/print`, {
+        label: "test"
+    });
+
+    console.log("Print:", res.data);
 }
 
 // Run tests
 (async () => {
-    await testDetect();
-    await testTranscribe();
-    await testLabel();
-    await testTTS();
-    await testPipeline();
+    try {
+        await testImagePipeline();
+        await testAudioPipeline();
+        await testConfirm();
+        await testPrint();
+    } catch (error) {
+        console.error("Test failed:", error.response ? error.response.data : error.message);
+    }
 })();
