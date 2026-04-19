@@ -8,6 +8,8 @@ import asyncio
 import os
 import base64
 from flask_cors import CORS
+import sqlite3
+from datetime import datetime
 
 app = Flask(__name__)
 CORS(app)
@@ -29,6 +31,34 @@ llm_model = AutoModelForCausalLM.from_pretrained(
     model_id,
     torch_dtype=torch.float16
 ).to("cuda")
+
+# -------------------------
+# DATABASE SETUP
+# -------------------------
+
+def init_db():
+    conn = sqlite3.connect('labels.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS labels
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  english TEXT NOT NULL,
+                  braille TEXT NOT NULL,
+                  braille_dots TEXT NOT NULL,
+                  mode TEXT NOT NULL,
+                  timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
+    conn.commit()
+    conn.close()
+
+def save_label(english, braille, braille_dots, mode):
+    conn = sqlite3.connect('labels.db')
+    c = conn.cursor()
+    c.execute("INSERT INTO labels (english, braille, braille_dots, mode) VALUES (?, ?, ?, ?)",
+              (english, braille, braille_dots, mode))
+    conn.commit()
+    conn.close()
+
+# Initialize database on startup
+init_db()
 
 # -------------------------
 # BRAILLE PATTERNS
@@ -95,9 +125,24 @@ def detect_objects(image_path):
     results = yolo_model(image_path, device=0)
     names = results[0].names
     classes = results[0].boxes.cls.tolist()
+    confidences = results[0].boxes.conf.tolist()
 
-    objects = [names[int(c)] for c in classes]
-    return list(set(objects))
+    # Debug: show all detections
+    all_detections = []
+    for cls, conf in zip(classes, confidences):
+        obj_name = names[int(cls)]
+        all_detections.append(f"{obj_name} ({conf:.2f})")
+    print(f"[IMAGE] All detections: {all_detections}")
+
+    # Filter by confidence threshold (only keep detections > 0.3 for now, can adjust)
+    objects_with_conf = []
+    for cls, conf in zip(classes, confidences):
+        if conf > 0.3:  # Lower threshold to see more detections
+            objects_with_conf.append(names[int(cls)])
+
+    objects = list(set(objects_with_conf))
+    print(f"[IMAGE] Filtered objects (conf > 0.3): {objects}")
+    return objects
 
 
 def speech_to_text(audio_path):
@@ -175,9 +220,9 @@ def image_pipeline():
         objects = detect_objects(image_path)
         print(f"[IMAGE] Detected objects: {objects}")
         if not objects:
-            print("[IMAGE] No objects detected, sending 'please try again'")
-            audio_file = text_to_speech("please try again")
-            return jsonify({"audio": audio_file, "label": None})
+            print("[IMAGE] No objects detected with high confidence, suggesting voice input")
+            audio_file = text_to_speech("No objects detected. Please try voice input instead.")
+            return jsonify({"audio": audio_file, "label": None, "suggestion": "voice"})
 
         label = generate_label(objects, "")
         print(f"[IMAGE] Generated label: {label}")
@@ -221,12 +266,40 @@ def audio_pipeline():
 def print_label():
     data = request.get_json()
     label = data.get("label")
+    mode = data.get("mode", "unknown")  # Default to "unknown" if not provided
     if not label:
         return jsonify({"error": "No label provided"}), 400
 
     encoded, braille, braille_dots = encode_to_braille(label)
+    
+    # Save to database
+    save_label(label, braille, braille_dots, mode)
+    print(f"[PRINT] Saved label to database: {label} ({mode})")
+    
     # TODO: Send encoded to ESP32 for printing
     return jsonify({"encoded": encoded, "braille": braille, "braille_dots": braille_dots})
+
+
+@app.route("/labels", methods=["GET"])
+def get_labels():
+    conn = sqlite3.connect('labels.db')
+    c = conn.cursor()
+    c.execute("SELECT id, english, braille, braille_dots, mode, timestamp FROM labels ORDER BY timestamp DESC")
+    rows = c.fetchall()
+    conn.close()
+    
+    labels = []
+    for row in rows:
+        labels.append({
+            "id": row[0],
+            "english": row[1],
+            "braille": row[2],
+            "braille_dots": row[3],
+            "mode": row[4],
+            "timestamp": row[5]
+        })
+    
+    return jsonify({"labels": labels})
 
 
 @app.route("/ping", methods=["GET"])

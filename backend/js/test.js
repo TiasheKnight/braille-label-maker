@@ -2,7 +2,7 @@ const axios = require("axios");
 const fs = require("fs");
 const FormData = require("form-data");
 
-const BASE_URL = "http://127.0.0.1:5000";
+const BASE_URL = "https://anatomist-waving-sternness.ngrok-free.dev";
 
 // ------------------
 // TEST CONNECTION

@@ -211,7 +211,6 @@ export default function HomeScreen() {
       const photo = await cameraRef.current?.takePictureAsync();
       if (!photo?.uri) throw new Error('No photo taken');
 
-      setShowCamera(false);
       setAppState('processing');
       setStatusLabel('Processing…');
 
@@ -234,6 +233,7 @@ export default function HomeScreen() {
         setAppState('idle');
         setStatusLabel('');
         setPendingResult(null);
+        setShowCamera(false);
       }
     } catch (err) {
       console.error(err);
@@ -267,7 +267,7 @@ const startConfirmRecording = async (result: PipelineResponse) => {
 
       const confirmation = await sendConfirmation(uri);
       if (confirmation.confirmed) {
-        const printResult = await sendPrint(label); // ✅ no error
+        const printResult = await sendPrint(label, activePage === 0 ? 'voice' : 'image'); // ✅ pass mode
 
         await addHistoryEntry({
           word: label,
@@ -292,7 +292,7 @@ const startConfirmRecording = async (result: PipelineResponse) => {
       setPendingResult(null);
       setShowCamera(false);
     }, 2000);
-}, 3000);
+  }, 5000);
 };
 
   const speakPagePrompt = useCallback((page: number) => {
