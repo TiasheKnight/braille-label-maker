@@ -3,8 +3,6 @@ from ultralytics import YOLO
 from faster_whisper import WhisperModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import torch
-import edge_tts
-import asyncio
 import os
 import base64
 from flask_cors import CORS
@@ -23,6 +21,9 @@ CORS(app)
 PRINT_SECRET = os.environ.get("BRAILLE_PRINT_SECRET", "dev-braille-print-secret")
 # Optional: POST two-part job to ESP32 after each confirmed print, e.g. http://192.168.1.50/print-job
 ESP32_PRINT_URL = os.environ.get("ESP32_PRINT_URL", "").strip()
+
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
+ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID")
 
 # -------------------------
 # LOAD MODELS (once!)
@@ -264,18 +265,27 @@ def generate_label_from_speech(speech_text):
     return label
 
 
-async def tts_async(text, output_file="output.mp3"):
-    communicate = edge_tts.Communicate(text, "en-US-AriaNeural")
-    await communicate.save(output_file)
-    with open(output_file, "rb") as f:
-        audio_data = f.read()
-    return base64.b64encode(audio_data).decode()
-
-
 def text_to_speech(text):
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    return loop.run_until_complete(tts_async(text))
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}"
+
+    headers = {
+        "xi-api-key": ELEVENLABS_API_KEY,
+        "Content-Type": "application/json",
+    }
+
+    data = {
+        "text": text,
+        "model_id": "eleven_monolingual_v1",
+    }
+
+    r = requests.post(url, json=data, headers=headers)
+
+    print(r.text)
+
+    if r.status_code != 200:
+        raise Exception("TTS failed")
+
+    return base64.b64encode(r.content).decode()
 
 
 # -------------------------
