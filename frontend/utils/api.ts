@@ -16,6 +16,22 @@ export interface PrintResponse {
   braille_dots: string;
 }
 
+export interface LabelRow {
+  id: number;
+  english: string;
+  braille: string;
+  braille_dots: string;
+  mode: string;
+  timestamp: string;
+}
+
+export async function fetchLabels(): Promise<LabelRow[]> {
+  const response = await fetch(`${BASE_URL}/labels`);
+  if (!response.ok) throw new Error(`Labels API error: ${response.status}`);
+  const data = await response.json();
+  return data.labels ?? [];
+}
+
 export async function sendVoiceRecording(audioUri: string): Promise<PipelineResponse> {
   const formData = new FormData();
 

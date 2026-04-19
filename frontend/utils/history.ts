@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { fetchLabels, LabelRow } from './api';
 
 export interface HistoryEntry {
   id: string;
@@ -10,38 +11,52 @@ export interface HistoryEntry {
   mode: 'voice' | 'image';
 }
 
-const STORAGE_KEY = 'braille_history';
+const FAVORITES_KEY = 'braille_favorite_ids';
 
+function parseDbTimestamp(ts: string): number {
+  const normalized = ts.includes('T') ? ts : `${ts.replace(' ', 'T')}`;
+  const ms = Date.parse(normalized);
+  return Number.isNaN(ms) ? Date.now() : ms;
+}
+
+async function getFavoriteIds(): Promise<Set<string>> {
+  try {
+    const raw = await AsyncStorage.getItem(FAVORITES_KEY);
+    if (!raw) return new Set();
+    const arr: string[] = JSON.parse(raw);
+    return new Set(arr);
+  } catch {
+    return new Set();
+  }
+}
+
+function rowToEntry(row: LabelRow, favoriteIds: Set<string>): HistoryEntry {
+  return {
+    id: String(row.id),
+    word: row.english,
+    braille: row.braille,
+    brailleDots: row.braille_dots,
+    timestamp: parseDbTimestamp(row.timestamp),
+    favorited: favoriteIds.has(String(row.id)),
+    mode: row.mode === 'image' ? 'image' : 'voice',
+  };
+}
+
+/** Loads all labels from the backend database (GET /labels). */
 export async function getHistory(): Promise<HistoryEntry[]> {
   try {
-    const raw = await AsyncStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : [];
+    const [labels, favoriteIds] = await Promise.all([fetchLabels(), getFavoriteIds()]);
+    return labels.map((row) => rowToEntry(row, favoriteIds));
   } catch {
     return [];
   }
 }
 
-export async function addHistoryEntry(
-  entry: Omit<HistoryEntry, 'id' | 'timestamp' | 'favorited'>
-): Promise<HistoryEntry> {
-  const history = await getHistory();
-  const newEntry: HistoryEntry = {
-    ...entry,
-    id: Date.now().toString(),
-    timestamp: Date.now(),
-    favorited: false,
-  };
-  history.unshift(newEntry);
-  await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(history));
-  return newEntry;
-}
-
 export async function toggleFavorite(id: string): Promise<void> {
-  const history = await getHistory();
-  const updated = history.map((e) =>
-    e.id === id ? { ...e, favorited: !e.favorited } : e
-  );
-  await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+  const favs = await getFavoriteIds();
+  if (favs.has(id)) favs.delete(id);
+  else favs.add(id);
+  await AsyncStorage.setItem(FAVORITES_KEY, JSON.stringify([...favs]));
 }
 
 export function groupByDate(entries: HistoryEntry[]): Record<string, HistoryEntry[]> {
