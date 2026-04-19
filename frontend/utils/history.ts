@@ -7,7 +7,7 @@ export interface HistoryEntry {
   brailleDots: string;
   timestamp: number;
   favorited: boolean;
-  mode: 'voice' | 'scan';
+  mode: 'voice' | 'image';
 }
 
 const STORAGE_KEY = 'braille_history';
